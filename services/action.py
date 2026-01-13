@@ -1,7 +1,16 @@
 def detect_action(message: str):
-    msg = message.lower()
-    if "start contract" in msg:
+    msg = message.lower().strip()
+
+    if any(k in msg for k in ["start contract", "new contract", "create contract"]):
         return "START_CONTRACT"
-    if "update phone" in msg:
+
+    if any(k in msg for k in ["update phone", "change phone"]):
         return "UPDATE_PHONE"
-    return None
+
+    if any(k in msg for k in [
+        "filter", "query", "max", "min", "count",
+        "greater", "less", "show", "list"
+    ]):
+        return "CREATE_FILTER"
+
+    return "REJECT"

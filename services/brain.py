@@ -1,21 +1,33 @@
-from sqlalchemy.orm import Session
 from services.memory import get_or_create_session
 from services.action import detect_action
 from services.flow import handle_flow
+from services.filter_builder import build_filter
 from flow_definitions import FLOW_STEPS
+from context_definitions import list_available_contexts
 
-def process_message(db: Session, session_id: str, message: str):
-    chat_session = get_or_create_session(db, session_id)
+def process_message(db, session_id, message, context=None):
+    session = get_or_create_session(db, session_id)
 
-    if chat_session.action and chat_session.step:
-        return handle_flow(db, chat_session, message)
+    # Continue existing flows FIRST
+    if session.action and session.step:
+        return handle_flow(db, session, message)
 
-    action = detect_action(message)
-    if not action:
-        return "I can help with company-related services only."
+    decision = detect_action(message)
 
-    chat_session.action = action
-    chat_session.step = FLOW_STEPS[action][0][0]
-    db.commit()
+    # NEW: SQL FILTERS
+    if decision == "CREATE_FILTER":
+        if not context:
+            return {
+                "message": "Please specify data context",
+                "available_contexts": list_available_contexts()
+            }
+        return build_filter(context, message)
 
-    return FLOW_STEPS[action][0][1]
+    # EXISTING FLOWS (UNCHANGED)
+    if decision in FLOW_STEPS:
+        session.action = decision
+        session.step = FLOW_STEPS[decision][0][0]
+        db.commit()
+        return FLOW_STEPS[decision][0][1]
+
+    return "I can help start a contract, update phone, or create data filters."

@@ -7,6 +7,11 @@ from services.brain import process_message
 router = APIRouter()
 
 @router.post("/chat", response_model=ChatResponse)
-def chat(request: ChatRequest, db: Session = Depends(get_db)):
-    reply = process_message(db, request.session_id, request.message)
+def chat(req: ChatRequest, db: Session = Depends(get_db)):
+    reply = process_message(
+        db,
+        req.session_id,
+        req.message,
+        req.context
+    )
     return {"reply": reply}
