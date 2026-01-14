@@ -4,7 +4,9 @@ from context_definitions import get_context_info
 
 
 class FilterBuilder:
-    """Build Supabase SELECT and UPDATE queries from natural language"""
+    """
+    Build Supabase SELECT and UPDATE queries from natural language
+    """
 
     def __init__(self, context_key: str):
         self.context_key = context_key.upper()
@@ -16,65 +18,67 @@ class FilterBuilder:
         self.table_name = self.context_info["table_name"]
         self.columns = self.context_info["columns"]
 
-    def parse_query(self, query: str) -> Dict:
-        query = query.lower().strip()
+    # ==========================================================
+    # ENTRY POINT
+    # ==========================================================
 
-        # ---------- UPDATE DETECTION ----------
-        if any(w in query for w in ["update", "set", "change", "modify"]):
+    def parse_query(self, query: str) -> Dict:
+        query_lower = query.lower().strip()
+
+        # -------- UPDATE ----------
+        if any(w in query_lower for w in ["update", "set", "change", "modify"]):
             return self._handle_update(query)
 
         base = f'supabase.table("{self.table_name}").select("*")'
 
-        if any(w in query for w in ["maximum", "max", "highest", "largest"]):
-            return self._handle_max_query(query, base)
+        # -------- AGGREGATIONS ----------
+        if any(w in query_lower for w in ["maximum", "max", "highest", "largest"]):
+            return self._handle_max(query_lower, base)
 
-        elif any(w in query for w in ["minimum", "min", "lowest", "smallest"]):
-            return self._handle_min_query(query, base)
+        if any(w in query_lower for w in ["minimum", "min", "lowest", "smallest"]):
+            return self._handle_min(query_lower, base)
 
-        elif any(w in query for w in ["average", "avg", "mean"]):
-            return self._handle_avg_query(query)
+        if any(w in query_lower for w in ["average", "avg", "mean"]):
+            return self._handle_avg(query_lower)
 
-        elif any(w in query for w in ["count", "number of", "how many"]):
-            return self._handle_count_query(query)
+        # -------- COUNT ----------
+        if re.search(r"\b(count|total|how many|number of)\b", query_lower):
+            return self._handle_count()
 
-        elif any(w in query for w in ["greater than", "more than", "above", ">"]):
-            return self._handle_comparison(query, "gt", base)
+        # -------- FILTERS ----------
+        if "between" in query_lower:
+            return self._handle_between(query_lower, base)
 
-        elif any(w in query for w in ["less than", "below", "under", "<"]):
-            return self._handle_comparison(query, "lt", base)
+        if any(w in query_lower for w in ["like", "contains", "includes"]):
+            return self._handle_like(query_lower, base)
 
-        elif any(w in query for w in ["equal to", "equals", "is", "="]):
-            return self._handle_comparison(query, "eq", base)
+        # -------- CONDITIONS & COMPARISONS ----------
+        if any(w in query_lower for w in ["=", " is ", " equals ", "less than", "greater than",
+                                         "below", "above", "<", ">"]):
+            base = self._apply_conditions(query_lower, base)
+            return {"supabase_query": base}
 
-        elif "between" in query:
-            return self._handle_between(query, base)
-
-        elif any(w in query for w in ["like", "contains", "includes"]):
-            return self._handle_like(query, base)
-
-        elif any(w in query for w in ["sort", "order", "arrange"]):
-            return self._handle_order(query, base)
-
-        elif any(w in query for w in ["status", "active", "inactive", "pending", "completed"]):
-            return self._handle_status_filter(query, base)
-
+        # If no recognized pattern, return base
         return {"supabase_query": base}
 
-    # ---------------- UPDATE HANDLER ---------------- #
+    # ==========================================================
+    # UPDATE HANDLER
+    # ==========================================================
 
     def _handle_update(self, query: str) -> Dict:
         updates = self._extract_update_values(query)
         conditions = self._extract_conditions(query)
 
-        if not updates:
-            return {"supabase_query": ""}
+        if not updates or not conditions:
+            return {"error": "Invalid UPDATE query. SET or WHERE clause missing"}
 
-        update_dict = "{ " + ", ".join(
-            f'"{k}": "{v}"' if self.columns[k]["type"] == "STRING" else f'"{k}": {v}'
+        update_payload = "{ " + ", ".join(
+            f'"{k}": "{v}"' if self.columns[k]["type"] == "STRING"
+            else f'"{k}": {v}'
             for k, v in updates.items()
         ) + " }"
 
-        base = f'supabase.table("{self.table_name}").update({update_dict})'
+        base = f'supabase.table("{self.table_name}").update({update_payload})'
 
         for col, val in conditions.items():
             if self.columns[col]["type"] == "STRING":
@@ -84,66 +88,106 @@ class FilterBuilder:
 
         return {"supabase_query": base}
 
-    # ---------------- SELECT HANDLERS ---------------- #
+    # ==========================================================
+    # SELECT HANDLERS
+    # ==========================================================
 
-    def _handle_max_query(self, query: str, base: str) -> Dict:
-        column = self._extract_column(query)
-        return {"supabase_query": f'{base}.order("{column}", desc=True).limit(1)'} if column else {"supabase_query": base}
+    def _handle_max(self, query: str, base: str) -> Dict:
+        col = self._extract_column(query)
+        return {"supabase_query": f'{base}.order("{col}", desc=True).limit(1)'} if col else {"supabase_query": base}
 
-    def _handle_min_query(self, query: str, base: str) -> Dict:
-        column = self._extract_column(query)
-        return {"supabase_query": f'{base}.order("{column}").limit(1)'} if column else {"supabase_query": base}
+    def _handle_min(self, query: str, base: str) -> Dict:
+        col = self._extract_column(query)
+        return {"supabase_query": f'{base}.order("{col}").limit(1)'} if col else {"supabase_query": base}
 
-    def _handle_avg_query(self, query: str) -> Dict:
-        column = self._extract_column(query)
-        return {"supabase_query": f'supabase.table("{self.table_name}").select("avg({column})")'} if column else {"supabase_query": ""}
+    def _handle_avg(self, query: str) -> Dict:
+        col = self._extract_column(query)
+        return {
+            "supabase_query": f'supabase.table("{self.table_name}").select("avg({col})")'
+        } if col else {"supabase_query": ""}
 
-    def _handle_count_query(self, query: str) -> Dict:
-        return {"supabase_query": f'supabase.table("{self.table_name}").select("*", count="exact")'}
-
-    def _handle_comparison(self, query: str, operator: str, base: str) -> Dict:
-        column = self._extract_column(query)
-        value = self._extract_value(query, column)
-
-        if not column or value is None:
-            return {"supabase_query": base}
-
-        if self.columns[column]["type"] == "STRING":
-            return {"supabase_query": f'{base}.{operator}("{column}", "{value}")'}
-
-        return {"supabase_query": f'{base}.{operator}("{column}", {int(value)})'}
+    def _handle_count(self) -> Dict:
+        return {
+            "supabase_query": f'supabase.table("{self.table_name}").select("*", count="exact")'
+        }
 
     def _handle_between(self, query: str, base: str) -> Dict:
-        column = self._extract_column(query)
+        col = self._extract_column(query)
         nums = re.findall(r'\d+', query)
-        if not column or len(nums) < 2:
+
+        if not col or len(nums) < 2:
             return {"supabase_query": base}
-        return {"supabase_query": f'{base}.gte("{column}", {nums[0]}).lte("{column}", {nums[1]})'}
+
+        return {
+            "supabase_query": f'{base}.gte("{col}", {nums[0]}).lte("{col}", {nums[1]})'
+        }
 
     def _handle_like(self, query: str, base: str) -> Dict:
-        column = self._extract_column(query)
-        value = self._extract_quoted_value(query)
-        if not column or not value:
-            return {"supabase_query": base}
-        return {"supabase_query": f'{base}.ilike("{column}", "%{value}%")'}
+        col = self._extract_column(query)
+        val = self._extract_quoted_value(query)
 
-    def _handle_order(self, query: str, base: str) -> Dict:
-        column = self._extract_column(query)
-        desc = any(w in query for w in ["desc", "descending", "highest", "largest"])
-        return {"supabase_query": f'{base}.order("{column}", desc={desc})'} if column else {"supabase_query": base}
-
-    def _handle_status_filter(self, query: str, base: str) -> Dict:
-        status_col = next((c for c in self.columns if "status" in c.lower()), None)
-        if not status_col:
+        if not col or not val:
             return {"supabase_query": base}
 
-        for status in ["active", "inactive", "pending", "completed", "cancelled", "suspended"]:
-            if status in query:
-                return {"supabase_query": f'{base}.eq("{status_col}", "{status}")'}
+        return {
+            "supabase_query": f'{base}.ilike("{col}", "%{val}%")'
+        }
 
-        return {"supabase_query": base}
+    # ==========================================================
+    # CONDITIONS + COMPARISONS (AND MULTIPLE)
+    # ==========================================================
 
-    # ---------------- HELPERS ---------------- #
+    def _apply_conditions(self, query: str, base: str) -> str:
+        conditions = {}
+        operators = {
+            "less than": "lt",
+            "below": "lt",
+            "under": "lt",
+            "<": "lt",
+            "greater than": "gt",
+            "above": "gt",
+            "over": "gt",
+            ">": "gt",
+        }
+
+        for col, meta in self.columns.items():
+            # ----- EQUALITY -----
+            quoted_pattern = rf'{col}\s*(=|is|equals?)\s*["\']([^"\']+)["\']'
+            plain_pattern = rf'{col}\s*(=|is|equals?)\s*([0-9]+)'
+
+            quoted_match = re.search(quoted_pattern, query, re.IGNORECASE)
+            plain_match = re.search(plain_pattern, query, re.IGNORECASE)
+
+            if quoted_match:
+                val = quoted_match.group(2)
+                conditions[col] = val
+            elif plain_match:
+                val = int(plain_match.group(2))
+                conditions[col] = val
+
+            # ----- COMPARISONS -----
+            for phrase, op in operators.items():
+                pattern = rf'{col}.*?{phrase}.*?(\d+)'
+                match = re.search(pattern, query, re.IGNORECASE)
+                if match:
+                    val = int(match.group(1))
+                    if meta["type"] == "INTEGER":
+                        base += f'.{op}("{col}", {val})'
+                    else:
+                        base += f'.{op}("{col}", "{val}")'
+
+        # Apply equality conditions
+        for col, val in conditions.items():
+            if self.columns[col]["type"] == "STRING":
+                base += f'.eq("{col}", "{val}")'
+            else:
+                base += f'.eq("{col}", {val})'
+
+        return base
+
+    # ==========================================================
+    # HELPERS
+    # ==========================================================
 
     def _extract_column(self, query: str) -> Optional[str]:
         for col in self.columns:
@@ -151,21 +195,9 @@ class FilterBuilder:
                 return col
         return None
 
-    def _extract_value(self, query: str, column: str) -> Optional[str]:
-        quoted = re.findall(r'["\']([^"\']+)["\']', query)
-        if quoted:
-            return quoted[0]
-
-        numbers = re.findall(r'\d+(?:\.\d+)?', query)
-        if numbers:
-            return numbers[0]
-
-        match = re.search(rf'{column}\s*(?:is|=|equals?)\s*(\w+)', query, re.IGNORECASE)
-        return match.group(1) if match else None
-
     def _extract_quoted_value(self, query: str) -> Optional[str]:
-        quoted = re.findall(r'["\']([^"\']+)["\']', query)
-        return quoted[0] if quoted else None
+        match = re.findall(r'["\']([^"\']+)["\']', query)
+        return match[0] if match else None
 
     def _extract_update_values(self, query: str) -> Dict:
         updates = {}
@@ -173,30 +205,50 @@ class FilterBuilder:
         if not match:
             return updates
 
-        assignments = match.group(1).split(',')
+        assignments = match.group(1).split(",")
 
-        for a in assignments:
-            if '=' not in a:
+        for item in assignments:
+            if "=" not in item:
                 continue
-            col, val = a.split('=', 1)
+            col, val = item.split("=", 1)
             col = col.strip()
             val = val.strip().strip('"\'')
             if col in self.columns:
-                updates[col] = val if self.columns[col]["type"] == "STRING" else int(val)
+                updates[col] = (
+                    val if self.columns[col]["type"] == "STRING" else int(val)
+                )
+
         return updates
 
     def _extract_conditions(self, query: str) -> Dict:
         conditions = {}
+        match = re.search(r'where (.+)', query, re.IGNORECASE)
+        if not match:
+            return conditions
+
+        where_clause = match.group(1)
+
         for col in self.columns:
-            match = re.search(rf'{col}\s*=\s*["\']?([^"\']+)', query, re.IGNORECASE)
-            if match:
-                val = match.group(1)
-                conditions[col] = val if self.columns[col]["type"] == "STRING" else int(val)
+            m = re.search(
+                rf'{col}\s*=\s*["\']?([^"\']+)',
+                where_clause,
+                re.IGNORECASE
+            )
+            if m:
+                val = m.group(1)
+                if self.columns[col]["type"] == "INTEGER":
+                    val = int(val)
+                conditions[col] = val
+
         return conditions
 
+
+# ==========================================================
+# PUBLIC FUNCTION
+# ==========================================================
 
 def build_filter(context_key: str, query: str) -> Dict:
     try:
         return FilterBuilder(context_key).parse_query(query)
-    except ValueError:
-        return {"supabase_query": ""}
+    except Exception as e:
+        return {"error": str(e)}

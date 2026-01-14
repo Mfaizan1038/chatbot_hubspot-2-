@@ -14,4 +14,4 @@ class FilterRequest(BaseModel):
     query: str
 
 class FilterResponse(BaseModel):
-    sql: str
+    supabase_query: str

@@ -9,4 +9,4 @@ def create_filter(req: FilterRequest):
     result = build_filter(req.context, req.query)
     if "error" in result:
         raise HTTPException(400, result["error"])
-    return result
+    return {"supabase_query": result.get("supabase_query", "")}
